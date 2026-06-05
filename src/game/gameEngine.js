@@ -39,6 +39,7 @@ class GameEngine {
   createRoom(socketId, playerName) {
     const room = createEmptyRoom(this.createRoomId());
     room.players.push(createPlayer(socketId, playerName));
+    room.phase = ROOM_PHASES.PLACING;
     this.rooms.set(room.id, room);
     this.playerRooms.set(socketId, room.id);
     return room;
@@ -48,7 +49,9 @@ class GameEngine {
     const room = this.rooms.get(String(roomId).trim().toUpperCase());
     if (!room) throw new Error("房间不存在。");
     if (room.players.length >= 2) throw new Error("房间已满。");
-    if (room.phase !== ROOM_PHASES.WAITING) throw new Error("游戏已经开始。");
+    if (room.phase !== ROOM_PHASES.WAITING && room.phase !== ROOM_PHASES.PLACING) {
+      throw new Error("游戏已经开始。");
+    }
 
     room.players.push(createPlayer(socketId, playerName));
     room.phase = ROOM_PHASES.PLACING;
@@ -68,7 +71,7 @@ class GameEngine {
     if (room.players.length === 0) {
       this.rooms.delete(roomId);
     } else {
-      room.phase = ROOM_PHASES.WAITING;
+      room.phase = ROOM_PHASES.PLACING;
       room.currentTurnPlayerId = null;
       room.winnerId = null;
       room.players.forEach((player) => {

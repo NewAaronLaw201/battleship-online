@@ -16,6 +16,7 @@ function validFleet(offset = 0) {
 test("starts battle after both players place valid fleets", () => {
   const engine = new GameEngine();
   const room = engine.createRoom("p1", "A");
+  assert.equal(room.phase, "placing");
   engine.joinRoom(room.id, "p2", "B");
 
   engine.placeFleet("p1", validFleet(0));

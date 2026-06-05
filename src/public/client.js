@@ -164,6 +164,14 @@ function getKnownAttackResult(cellKey) {
 }
 
 function placeCurrentShip(x, y) {
+  if (!roomState?.you) {
+    addLog("请先创建或加入房间。", "tone-warning");
+    return;
+  }
+  if (roomState.phase !== "placing") {
+    addLog("当前还不能摆放军舰。", "tone-warning");
+    return;
+  }
   if (roomState?.you?.ready) return;
   const ship = nextShip();
   if (!ship) return;
@@ -175,6 +183,7 @@ function placeCurrentShip(x, y) {
   }
 
   placements.push(placement);
+  addLog(`已放置 ${ship.label}。`, "tone-success");
   updateSetup();
   renderOwnBoard();
 }
