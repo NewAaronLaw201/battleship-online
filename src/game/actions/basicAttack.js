@@ -27,7 +27,13 @@ function basicAttack(context, payload) {
     target.receivedHits.add(key);
     ship.hits.push(key);
     if (isShipSunk(ship)) {
-      sunkShip = { id: ship.id, label: ship.label, length: ship.length };
+      sunkShip = { 
+        id: ship.id, 
+        label: ship.label, 
+        length: ship.length, 
+        orientation: ship.orientation, 
+        cells: JSON.parse(JSON.stringify(ship.cells)) 
+      };
     }
   } else {
     target.receivedMisses.add(key);

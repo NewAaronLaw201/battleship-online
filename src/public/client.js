@@ -1,5 +1,16 @@
 const socket = io();
 
+console.log("Socket connected:", socket.connected);
+console.log("Socket id:", socket.id);
+
+socket.on("connect", () => {
+  console.log("Socket connected, id:", socket.id);
+});
+
+socket.on("disconnect", () => {
+  console.log("Socket disconnected");
+});
+
 const FLEET = [
   { id: "ship-2-1", length: 2, label: "巡逻艇" },
   { id: "ship-3-1", length: 3, label: "驱逐舰 A" },
@@ -18,12 +29,15 @@ let placements = [];
 let selectedShipId = FLEET[0].id;
 let hoverCell = null;
 let eventLog = [];
+let isLeavingRoom = false;
+let leaveRoomTimeoutId = null;
 
 const els = {
   statusText: document.querySelector("#statusText"),
   playerNameInput: document.querySelector("#playerNameInput"),
   roomIdInput: document.querySelector("#roomIdInput"),
   createRoomButton: document.querySelector("#createRoomButton"),
+  createAIBattleButton: document.querySelector("#createAIBattleButton"),
   joinRoomButton: document.querySelector("#joinRoomButton"),
   roomIdText: document.querySelector("#roomIdText"),
   youText: document.querySelector("#youText"),
@@ -34,13 +48,17 @@ const els = {
   verticalButton: document.querySelector("#verticalButton"),
   currentShipText: document.querySelector("#currentShipText"),
   shipPicker: document.querySelector("#shipPicker"),
-  resetFleetButton: document.querySelector("#resetFleetButton"),
+  resetPlacementButton: document.querySelector("#resetPlacementButton"),
   readyButton: document.querySelector("#readyButton"),
   ownBoard: document.querySelector("#ownBoard"),
   attackBoard: document.querySelector("#attackBoard"),
   inventoryList: document.querySelector("#inventoryList"),
-  eventLog: document.querySelector("#eventLog")
+  eventLog: document.querySelector("#eventLog"),
+  leaveRoomButton: document.querySelector("#leaveRoomButton"),
+  nextRoundButton: document.querySelector("#nextRoundButton")
 };
+
+console.log("leaveRoomButton element:", els.leaveRoomButton);
 
 function boardSize() {
   return roomState?.boardSize || 11;
@@ -62,7 +80,8 @@ function isShipPlaced(shipId) {
 }
 
 function selectedShip() {
-  return FLEET.find((ship) => ship.id === selectedShipId && !isShipPlaced(ship.id)) || null;
+  // 返回任何选中的船只（无论是否已放置）
+  return FLEET.find((ship) => ship.id === selectedShipId) || null;
 }
 
 function firstUnplacedShip() {
@@ -70,8 +89,9 @@ function firstUnplacedShip() {
 }
 
 function ensureSelectedShip() {
+  // 确保选中了一艘船（可以是已放置或未放置的）
   if (!selectedShip()) {
-    selectedShipId = firstUnplacedShip()?.id || null;
+    selectedShipId = FLEET[0]?.id || null;
   }
 }
 
@@ -103,43 +123,85 @@ function renderBoards() {
 }
 
 function renderOwnBoard() {
-  const shipCells = new Set();
   const hitCells = new Set((roomState?.you?.receivedHits || []).map(key));
   const missCells = new Set((roomState?.you?.receivedMisses || []).map(key));
   const placedShips = roomState?.you?.ships?.length ? roomState.you.ships : placements;
 
+  // 创建船只格子映射，同时标记被摧毁的船只和方向
+  const shipCells = new Set();
+  const destroyedShipCells = new Map(); // key -> orientation
+
   placedShips.forEach((ship) => {
-    cellsForPlacement(ship).forEach((cell) => shipCells.add(key(cell)));
+    // 服务器返回的 ships 有 cells 属性，本地 placements 有 x, y 属性
+    let shipCellsList;
+    let orientation;
+    
+    if (ship.cells && ship.cells.length > 0) {
+      // 服务器格式：已经有计算好的 cells
+      shipCellsList = ship.cells;
+      orientation = ship.orientation;
+    } else {
+      // 本地格式：需要计算 cells
+      shipCellsList = cellsForPlacement(ship);
+      orientation = ship.orientation;
+    }
+    
+    // 检查船只是否被摧毁（所有格子都被击中）
+    const isDestroyed = shipCellsList.every(cell => hitCells.has(key(cell)));
+    
+    shipCellsList.forEach((cell) => {
+      const cellKey = key(cell);
+      shipCells.add(cellKey);
+      if (isDestroyed) {
+        destroyedShipCells.set(cellKey, orientation);
+      }
+    });
   });
 
   const preview = getPreviewCells();
-  els.ownBoard.innerHTML = "";
-
-  for (let y = 0; y < boardSize(); y += 1) {
-    for (let x = 0; x < boardSize(); x += 1) {
-      const cell = document.createElement("button");
-      const cellKey = key({ x, y });
-      cell.className = `cell ${(x + y) % 2 ? "water-alt" : ""}`;
-      cell.dataset.x = x;
-      cell.dataset.y = y;
-
-      if (shipCells.has(cellKey)) cell.classList.add("ship");
-      if (preview.cells.has(cellKey)) cell.classList.add(preview.valid ? "preview" : "invalid-preview");
-      if (hitCells.has(cellKey)) cell.classList.add("hit");
-      if (missCells.has(cellKey)) cell.classList.add("miss");
-
-      cell.addEventListener("mouseenter", () => {
-        hoverCell = { x, y };
-        renderOwnBoard();
-      });
-      cell.addEventListener("mouseleave", () => {
-        hoverCell = null;
-        renderOwnBoard();
-      });
-      cell.addEventListener("click", () => placeCurrentShip(x, y));
-      els.ownBoard.appendChild(cell);
+  
+  // 只更新格子状态，而不是重新创建整个棋盘
+  const cells = els.ownBoard.querySelectorAll(".cell");
+  
+  if (cells.length === 0) {
+    // 第一次渲染，创建棋盘
+    els.ownBoard.innerHTML = "";
+    for (let y = 0; y < boardSize(); y += 1) {
+      for (let x = 0; x < boardSize(); x += 1) {
+        const cell = document.createElement("button");
+        const cellKey = key({ x, y });
+        cell.className = `cell ${(x + y) % 2 ? "water-alt" : ""}`;
+        cell.dataset.x = x;
+        cell.dataset.y = y;
+        cell.type = "button";
+        els.ownBoard.appendChild(cell);
+      }
     }
   }
+  
+  // 更新所有格子的状态
+  els.ownBoard.querySelectorAll(".cell").forEach((cell) => {
+    const x = parseInt(cell.dataset.x);
+    const y = parseInt(cell.dataset.y);
+    const cellKey = key({ x, y });
+    
+    // 重置类名
+    cell.className = `cell ${(x + y) % 2 ? "water-alt" : ""}`;
+    
+    // 添加状态类
+    if (shipCells.has(cellKey)) {
+      // 如果船只被摧毁，显示摧毁效果
+      const destroyedOrientation = destroyedShipCells.get(cellKey);
+      if (destroyedOrientation) {
+        cell.classList.add(`ship-destroyed-${destroyedOrientation}`);
+      } else {
+        cell.classList.add("ship");
+      }
+    }
+    if (preview.cells.has(cellKey)) cell.classList.add(preview.valid ? "preview" : "invalid-preview");
+    if (hitCells.has(cellKey)) cell.classList.add("hit");
+    if (missCells.has(cellKey)) cell.classList.add("miss");
+  });
 }
 
 function getPreviewCells() {
@@ -156,8 +218,42 @@ function getPreviewCells() {
 
 function renderAttackBoard() {
   const attacks = new Set((roomState?.you?.attacks || []).map(key));
-  const canAttack = roomState?.phase === "battle" && roomState.currentTurnPlayerId === roomState.you?.id;
-  els.attackBoard.classList.toggle("disabled", !canAttack);
+  const isFinished = roomState?.phase === "finished";
+  const canAttack = !isFinished && roomState?.phase === "battle" && roomState.currentTurnPlayerId === roomState.you?.id;
+  els.attackBoard.classList.toggle("disabled", !canAttack && !isFinished);
+
+  // 收集所有被摧毁军舰的格子
+  const destroyedShipCells = new Map(); // key -> orientation
+
+  for (const entry of eventLog) {
+    const sunkShipInfo = entry.attackMark?.sunkShipInfo;
+    if (sunkShipInfo && sunkShipInfo.cells && sunkShipInfo.cells.length > 0) {
+      sunkShipInfo.cells.forEach((cell) => {
+        const cellKey = key(cell);
+        destroyedShipCells.set(cellKey, sunkShipInfo.orientation);
+      });
+    }
+  }
+
+  // 游戏结束后或战斗中，对手的所有船只格子（用于显示完整布局或追踪）
+  const opponentShipCells = new Set();
+  const opponentShipCellsDestroyed = new Map(); // key -> orientation
+  // 只有在 finished 阶段才显示对手所有船只（包括未击中的）
+  // 在 placing 阶段不应该有任何 opponent.ships 数据
+  if (roomState?.phase === "finished" && roomState.opponent?.ships) {
+    roomState.opponent.ships.forEach((ship) => {
+      // 检查该船只是否已被摧毁
+      const isDestroyed = ship.cells.every(cell => ship.hits.includes(key(cell)));
+      ship.cells.forEach((cell) => {
+        const cellKey = key(cell);
+        opponentShipCells.add(cellKey);
+        if (isDestroyed) {
+          opponentShipCellsDestroyed.set(cellKey, ship.orientation);
+        }
+      });
+    });
+  }
+
   els.attackBoard.innerHTML = "";
 
   for (let y = 0; y < boardSize(); y += 1) {
@@ -165,10 +261,33 @@ function renderAttackBoard() {
       const cell = document.createElement("button");
       const cellKey = key({ x, y });
       const knownResult = getKnownAttackResult(cellKey);
+      const destroyedOrientation = destroyedShipCells.get(cellKey);
+
       cell.className = `cell ${(x + y) % 2 ? "water-alt" : ""}`;
+      cell.dataset.x = x;
+      cell.dataset.y = y;
+      cell.type = "button";
+
       if (knownResult) cell.classList.add(knownResult);
-      cell.disabled = !canAttack || attacks.has(cellKey);
-      cell.addEventListener("click", () => attackCell(x, y));
+
+      // 如果是被摧毁军舰的格子，添加摧毁样式
+      if (destroyedOrientation) {
+        cell.classList.add(`ship-destroyed-${destroyedOrientation}`);
+      }
+
+      // 游戏结束后，显示对手未被发现/未摧毁的船只位置
+      if (opponentShipCells.has(cellKey) && !destroyedOrientation) {
+        const shipDestroyedOrientation = opponentShipCellsDestroyed.get(cellKey);
+        if (shipDestroyedOrientation) {
+          cell.classList.add(`ship-destroyed-${shipDestroyedOrientation}`);
+        } else {
+          // 未被摧毁的船只显示为普通船只样式
+          cell.classList.add("ship");
+        }
+      }
+
+      // 游戏结束后不降低棋盘亮度（保持所有按钮可点击状态）
+      cell.disabled = !isFinished && (!canAttack || attacks.has(cellKey));
       els.attackBoard.appendChild(cell);
     }
   }
@@ -191,13 +310,20 @@ function placeCurrentShip(x, y) {
     addLog("当前还不能摆放军舰。", "tone-warning");
     return;
   }
-  if (roomState?.you?.ready) return;
+  if (roomState?.you?.ready) {
+    addLog("你已经准备好了，无法再摆放军舰。", "tone-warning");
+    return;
+  }
   ensureSelectedShip();
   const ship = selectedShip();
   if (!ship) {
-    addLog("请先选择一艘未摆放的军舰。", "tone-warning");
+    addLog("请先选择一艘军舰。", "tone-warning");
     return;
   }
+
+  // 检查是否已经放置过这艘船
+  const existingIndex = placements.findIndex(p => p.id === ship.id);
+  const isReplacing = existingIndex !== -1;
 
   const placement = { ...ship, x, y, orientation };
   if (!placementIsValid(placement)) {
@@ -205,9 +331,15 @@ function placeCurrentShip(x, y) {
     return;
   }
 
+  // 如果已经放置过，先移除旧的
+  if (isReplacing) {
+    placements.splice(existingIndex, 1);
+    addLog(`已将 ${ship.label} 移动到新位置。`, "tone-success");
+  } else {
+    addLog(`已放置 ${ship.label}。`, "tone-success");
+  }
+
   placements.push(placement);
-  addLog(`已放置 ${ship.label}。`, "tone-success");
-  selectedShipId = firstUnplacedShip()?.id || null;
   updateSetup();
   renderOwnBoard();
 }
@@ -224,8 +356,10 @@ function attackCell(x, y) {
 function updateSetup() {
   ensureSelectedShip();
   const ship = selectedShip();
-  els.currentShipText.textContent = ship ? `${ship.label}（长度 ${ship.length}）` : "舰队已摆放完成";
-  els.readyButton.disabled = placements.length !== FLEET.length || roomState?.you?.ready;
+  const placedCount = placements.length;
+  const totalCount = FLEET.length;
+  els.currentShipText.textContent = ship ? `${ship.label}（长度 ${ship.length}）` : "-";
+  els.readyButton.disabled = placedCount !== totalCount || roomState?.you?.ready;
   renderShipPicker();
 }
 
@@ -235,9 +369,9 @@ function renderShipPicker() {
     const placed = isShipPlaced(ship.id);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `ship-option ${selectedShipId === ship.id && !placed ? "active" : ""} ${placed ? "placed" : ""}`;
+    button.className = `ship-option ${selectedShipId === ship.id ? "active" : ""} ${placed ? "placed" : ""}`;
     button.innerHTML = `<span>${ship.label}</span><strong>${ship.length}格</strong>`;
-    button.disabled = placed || roomState?.you?.ready;
+    button.disabled = roomState?.you?.ready;
     button.addEventListener("click", () => {
       selectedShipId = ship.id;
       updateSetup();
@@ -250,8 +384,13 @@ function renderShipPicker() {
 function renderHeader() {
   els.roomIdText.textContent = roomState?.id || "-";
   els.youText.textContent = roomState?.you ? `${roomState.you.name}${roomState.you.ready ? "（已准备）" : ""}` : "-";
+
+  // 检查对手是否是 AI
+  const opponentIsAI = roomState?.opponent && roomState.opponent.name === "电脑";
   els.opponentText.textContent = roomState?.opponent
-    ? `${roomState.opponent.name}${roomState.opponent.ready ? "（已准备）" : ""}`
+    ? opponentIsAI
+      ? `电脑${roomState.opponent.ready ? "（已准备）" : ""}`
+      : `${roomState.opponent.name}${roomState.opponent.ready ? "（已准备）" : ""}`
     : "等待加入";
 
   if (!roomState) {
@@ -274,6 +413,11 @@ function renderHeader() {
   }
 
   els.setupPanel.style.display = roomState?.phase === "placing" && !roomState?.you?.ready ? "block" : "none";
+
+  // 游戏结束后显示"下一局"按钮
+  if (els.nextRoundButton) {
+    els.nextRoundButton.style.display = roomState?.phase === "finished" ? "block" : "none";
+  }
 }
 
 function renderInventory() {
@@ -288,8 +432,17 @@ function syncRoomState(nextState) {
   const previousRoomId = roomState?.id;
   roomState = nextState;
   if (previousRoomId && previousRoomId !== roomState.id) {
-    placements = [];
-    selectedShipId = FLEET[0].id;
+    resetLocalGameState();
+  }
+  // 游戏重置（从 finished 进入 placing）时清空本地数据
+  if (previousPhase === "finished" && roomState.phase === "placing") {
+    resetLocalGameState();
+  }
+  // 新一局开始时（placing 阶段且玩家未准备），清空所有残留状态
+  if (roomState.phase === "placing" && roomState.you && !roomState.you.ready) {
+    if (placements.length > 0) {
+      placements = [];
+    }
   }
   renderHeader();
   updateSetup();
@@ -303,6 +456,10 @@ function syncRoomState(nextState) {
 
 els.createRoomButton.addEventListener("click", () => {
   socket.emit("create_room", { playerName: els.playerNameInput.value.trim() || "玩家 1" });
+});
+
+els.createAIBattleButton.addEventListener("click", () => {
+  socket.emit("create_ai_room", { playerName: els.playerNameInput.value.trim() || "玩家 1" });
 });
 
 els.joinRoomButton.addEventListener("click", () => {
@@ -326,21 +483,167 @@ els.verticalButton.addEventListener("click", () => {
   renderOwnBoard();
 });
 
-els.resetFleetButton.addEventListener("click", () => {
-  placements = [];
-  selectedShipId = FLEET[0].id;
-  updateSetup();
-  renderOwnBoard();
-});
-
 els.readyButton.addEventListener("click", () => {
   socket.emit("place_fleet", { ships: placements });
+});
+
+els.resetPlacementButton.addEventListener("click", () => {
+  if (roomState?.you?.ready) {
+    addLog("你已经准备好了，无法重置。", "tone-warning");
+    return;
+  }
+  if (placements.length === 0) {
+    addLog("没有已放置的军舰。", "tone-warning");
+    return;
+  }
+  if (confirm("确定要重置所有已放置的军舰吗？")) {
+    placements = [];
+    selectedShipId = FLEET[0]?.id || null;
+    updateSetup();
+    renderOwnBoard();
+    addLog("已重置所有军舰。", "tone-success");
+  }
+});
+
+els.leaveRoomButton.addEventListener("click", () => {
+  handleLeaveRoomClick();
+});
+
+function handleLeaveRoomClick() {
+  // 检查是否在房间中
+  if (!roomState) {
+    addLog("你当前不在任何房间中。", "tone-warning");
+    return;
+  }
+
+  // 防止重复提交
+  if (isLeavingRoom) {
+    return;
+  }
+
+  // 确认对话框
+  const confirmed = confirm("确定要退出房间吗？");
+  if (!confirmed) {
+    return;
+  }
+
+  // 进入加载状态
+  isLeavingRoom = true;
+  if (els.leaveRoomButton) {
+    els.leaveRoomButton.disabled = true;
+    els.leaveRoomButton.textContent = "正在退出...";
+  }
+
+  // 收集房间ID和用户身份
+  const roomId = roomState.id;
+  const playerId = roomState.you?.id || socket.id;
+  const playerName = roomState.you?.name || "";
+
+  // 设置超时定时器
+  leaveRoomTimeoutId = setTimeout(() => {
+    if (isLeavingRoom) {
+      handleLeaveRoomFailure("退出房间超时，请检查网络连接。");
+    }
+  }, 8000);
+
+  // 发送退出请求
+  try {
+    socket.emit("leave_room", { roomId, playerId, playerName });
+  } catch (err) {
+    handleLeaveRoomFailure("发送退出请求失败：" + (err.message || "未知错误"));
+  }
+}
+
+function handleLeaveRoomSuccess() {
+  // 清理超时定时器
+  if (leaveRoomTimeoutId) {
+    clearTimeout(leaveRoomTimeoutId);
+    leaveRoomTimeoutId = null;
+  }
+
+  // 清除本地数据
+  roomState = null;
+  placements = [];
+  selectedShipId = FLEET[0]?.id || null;
+  hoverCell = null;
+  eventLog = [];
+
+  // 重新渲染所有UI（回到非房间状态）
+  renderHeader();
+  updateSetup();
+  renderInventory();
+  renderBoards();
+  renderLog();
+
+  // 恢复按钮状态
+  isLeavingRoom = false;
+  if (els.leaveRoomButton) {
+    els.leaveRoomButton.disabled = false;
+    els.leaveRoomButton.textContent = "退出房间";
+  }
+
+  // 隐藏"下一局"按钮
+  if (els.nextRoundButton) {
+    els.nextRoundButton.style.display = "none";
+  }
+
+  addLog("你已退出房间", "tone-success");
+}
+
+function handleLeaveRoomFailure(errorMessage) {
+  // 清理超时定时器
+  if (leaveRoomTimeoutId) {
+    clearTimeout(leaveRoomTimeoutId);
+    leaveRoomTimeoutId = null;
+  }
+
+  // 恢复按钮状态
+  isLeavingRoom = false;
+  if (els.leaveRoomButton) {
+    els.leaveRoomButton.disabled = false;
+    els.leaveRoomButton.textContent = "退出房间";
+  }
+
+  // 显示错误并保留房间状态
+  addLog(errorMessage || "退出房间失败，请重试。", "tone-danger");
+}
+
+function resetLocalGameState() {
+  // 立即清空所有本地游戏数据
+  placements = [];
+  selectedShipId = FLEET[0].id;
+  hoverCell = null;
+  eventLog = [];
+}
+
+els.nextRoundButton.addEventListener("click", () => {
+  if (!roomState || roomState.phase !== "finished") return;
+  // 立即清空本地状态，确保即使服务器响应延迟也能重置
+  resetLocalGameState();
+  socket.emit("reset_game");
 });
 
 socket.on("room_state", syncRoomState);
 
 socket.on("error_message", (message) => {
   addLog(message, "tone-danger");
+});
+
+socket.on("room_left", () => {
+  console.log("Received room_left event");
+  handleLeaveRoomSuccess();
+});
+
+socket.on("leave_room_failed", ({ message }) => {
+  handleLeaveRoomFailure(message || "退出房间失败，请重试。");
+});
+
+socket.on("opponent_left", ({ playerId }) => {
+  addLog("对手已退出房间", "tone-warning");
+  if (roomState) {
+    roomState.phase = "waiting";
+    updateTurnUI();
+  }
 });
 
 socket.on("game_event", (event) => {
@@ -358,11 +661,15 @@ socket.on("action_result", ({ publicResult, privateResult }) => {
 
   if (isAttacker) {
     const attackMark = privateResult?.attackBoardMark;
+    const sunkShipInfo = publicResult.sunkShip ? {
+      cells: publicResult.sunkShip.cells,
+      orientation: publicResult.sunkShip.orientation
+    } : null;
     eventLog.unshift({
       message: `你攻击 ${cellText}：${resultText}${publicResult.sunkShip ? `，摧毁 ${publicResult.sunkShip.label}` : ""}`,
       tone: publicResult.hit ? "tone-success" : "",
       at: new Date().toLocaleTimeString(),
-      attackMark: attackMark ? { key: key(attackMark.cell), result: attackMark.result } : null
+      attackMark: { key: key(attackMark?.cell || publicResult.cell), result: attackMark?.result || (publicResult.hit ? "hit" : "miss"), sunkShipInfo }
     });
   } else {
     eventLog.unshift({
@@ -374,9 +681,106 @@ socket.on("action_result", ({ publicResult, privateResult }) => {
 
   eventLog = eventLog.slice(0, 80);
   renderLog();
+  renderAttackBoard();
 });
 
 renderHeader();
 updateSetup();
 renderBoards();
 renderLog();
+
+// Setup click handlers after a short delay to ensure DOM is ready
+setTimeout(() => {
+  // Event delegation for own board clicks
+  els.ownBoard.addEventListener("click", (e) => {
+    const cell = e.target.closest(".cell");
+    if (!cell) return;
+    
+    const x = parseInt(cell.dataset.x);
+    const y = parseInt(cell.dataset.y);
+    placeCurrentShip(x, y);
+  });
+
+  // Event delegation for own board hover
+  els.ownBoard.addEventListener("mouseover", (e) => {
+    const cell = e.target.closest(".cell");
+    if (!cell) return;
+    
+    const x = parseInt(cell.dataset.x);
+    const y = parseInt(cell.dataset.y);
+    
+    if (hoverCell?.x !== x || hoverCell?.y !== y) {
+      hoverCell = { x, y };
+      renderOwnBoard();
+    }
+  });
+
+  els.ownBoard.addEventListener("mouseout", (e) => {
+    const cell = e.target.closest(".cell");
+    if (!cell) return;
+    
+    // 检查是否真的离开了棋盘
+    const relatedTarget = e.relatedTarget;
+    if (relatedTarget && els.ownBoard.contains(relatedTarget)) {
+      return;
+    }
+    
+    hoverCell = null;
+    renderOwnBoard();
+  });
+
+  // Event delegation for attack board clicks
+  els.attackBoard.addEventListener("click", (e) => {
+    const cell = e.target.closest(".cell");
+    if (!cell || cell.disabled) return;
+    
+    const x = parseInt(cell.dataset.x);
+    const y = parseInt(cell.dataset.y);
+    attackCell(x, y);
+  });
+
+  // Touch event handling for mobile
+  let touchStartTime = 0;
+  
+  els.ownBoard.addEventListener("touchstart", () => {
+    touchStartTime = Date.now();
+  }, { passive: true });
+
+  els.ownBoard.addEventListener("touchend", (e) => {
+    // Prevent double-tap zoom on mobile
+    if (Date.now() - touchStartTime < 300) {
+      e.preventDefault();
+    }
+    
+    // Handle touch tap for placement
+    const cell = e.target.closest(".cell");
+    if (!cell) return;
+    
+    const x = parseInt(cell.dataset.x);
+    const y = parseInt(cell.dataset.y);
+    placeCurrentShip(x, y);
+  }, { passive: false });
+
+  els.attackBoard.addEventListener("touchstart", () => {
+    touchStartTime = Date.now();
+  }, { passive: true });
+
+  els.attackBoard.addEventListener("touchend", (e) => {
+    // Prevent double-tap zoom on mobile
+    if (Date.now() - touchStartTime < 300) {
+      e.preventDefault();
+    }
+    
+    // Handle touch tap for attack
+    const cell = e.target.closest(".cell");
+    if (!cell || cell.disabled) return;
+    
+    const x = parseInt(cell.dataset.x);
+    const y = parseInt(cell.dataset.y);
+    attackCell(x, y);
+  }, { passive: false });
+
+  // Prevent context menu on long press
+  els.ownBoard.addEventListener("contextmenu", (e) => e.preventDefault());
+  els.attackBoard.addEventListener("contextmenu", (e) => e.preventDefault());
+}, 100);

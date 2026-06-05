@@ -2,7 +2,11 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
+    <meta name="description" content="双人联机战舰对战游戏" />
+    <meta name="theme-color" content="#0f766e" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>双人联机战舰</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -16,6 +20,7 @@
         <div class="room-panel">
           <input id="playerNameInput" maxlength="12" placeholder="玩家昵称" />
           <button id="createRoomButton">创建房间</button>
+          <button id="createAIBattleButton">与电脑对战</button>
           <input id="roomIdInput" maxlength="6" placeholder="房间号" />
           <button id="joinRoomButton">加入房间</button>
         </div>
@@ -49,11 +54,12 @@
               <button id="verticalButton">纵向</button>
             </div>
           </div>
+          <div class="placement-controls">
           <div>
             <span class="label">当前军舰</span>
             <strong id="currentShipText">-</strong>
           </div>
-          <button id="resetFleetButton">重置摆放</button>
+          <button id="resetPlacementButton">重置</button>
           <button id="readyButton" disabled>准备</button>
         </div>
         <div class="ship-picker" id="shipPicker"></div>
@@ -64,6 +70,7 @@
           <div class="section-title">
             <h2>我的棋盘</h2>
             <span>显示我方军舰与敌方攻击结果</span>
+            <button id="leaveRoomButton" class="leave-room-btn">退出房间</button>
           </div>
           <div id="ownBoard" class="board"></div>
         </section>
@@ -80,6 +87,7 @@
             <h2>战况</h2>
           </div>
           <div id="eventLog" class="event-log"></div>
+          <button id="nextRoundButton" class="next-round-btn" style="display: none;">下一局</button>
         </aside>
 
         <section class="board-zone">
