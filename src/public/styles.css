@@ -1,4 +1,5 @@
 :root {
+  --board-size: 11;
   --bg: #f4f7fb;
   --surface: #ffffff;
   --ink: #172033;
@@ -141,6 +142,35 @@ h2 {
   gap: 14px;
 }
 
+.ship-picker {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(130px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.ship-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-color: var(--line);
+  background: #fff;
+  color: var(--ink);
+}
+
+.ship-option.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.ship-option.placed {
+  border-color: #98a2b3;
+  background: #eef2f6;
+  color: var(--muted);
+}
+
 .segmented {
   display: flex;
   border: 1px solid var(--line);
@@ -182,7 +212,7 @@ h2 {
 
 .board {
   display: grid;
-  grid-template-columns: repeat(9, 1fr);
+  grid-template-columns: repeat(var(--board-size), 1fr);
   width: 100%;
   aspect-ratio: 1;
   border: 2px solid #344054;
@@ -324,6 +354,10 @@ h2 {
   .game-layout {
     grid-template-columns: 1fr;
   }
+
+  .ship-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 560px) {
@@ -343,5 +377,9 @@ h2 {
   .room-panel input,
   .room-panel button {
     width: 100%;
+  }
+
+  .ship-picker {
+    grid-template-columns: 1fr;
   }
 }

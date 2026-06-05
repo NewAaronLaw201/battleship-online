@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { ACTION_TYPES } = require("../src/game/constants");
-const { GameEngine } = require("../src/game/gameEngine");
+const { GameEngine, serializeRoomForPlayer } = require("../src/game/gameEngine");
 
 function validFleet(offset = 0) {
   return [
@@ -24,6 +24,13 @@ test("starts battle after both players place valid fleets", () => {
 
   assert.equal(readyRoom.phase, "battle");
   assert.ok(["p1", "p2"].includes(readyRoom.currentTurnPlayerId));
+});
+
+test("serializes an 11 by 11 board", () => {
+  const engine = new GameEngine();
+  const room = engine.createRoom("p1", "A");
+
+  assert.equal(serializeRoomForPlayer(room, "p1").boardSize, 11);
 });
 
 test("rejects overlapping ships", () => {

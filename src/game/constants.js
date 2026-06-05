@@ -1,4 +1,4 @@
-const BOARD_SIZE = 9;
+const BOARD_SIZE = 11;
 
 const FLEET_CONFIG = [
   { id: "ship-2-1", length: 2, label: "巡逻艇" },

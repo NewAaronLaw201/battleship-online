@@ -15,6 +15,7 @@ const ACTION_TYPES = {
 let roomState = null;
 let orientation = "horizontal";
 let placements = [];
+let selectedShipId = FLEET[0].id;
 let hoverCell = null;
 let eventLog = [];
 
@@ -32,6 +33,7 @@ const els = {
   horizontalButton: document.querySelector("#horizontalButton"),
   verticalButton: document.querySelector("#verticalButton"),
   currentShipText: document.querySelector("#currentShipText"),
+  shipPicker: document.querySelector("#shipPicker"),
   resetFleetButton: document.querySelector("#resetFleetButton"),
   readyButton: document.querySelector("#readyButton"),
   ownBoard: document.querySelector("#ownBoard"),
@@ -41,7 +43,7 @@ const els = {
 };
 
 function boardSize() {
-  return roomState?.boardSize || 9;
+  return roomState?.boardSize || 11;
 }
 
 function key(cell) {
@@ -55,12 +57,28 @@ function cellsForPlacement(ship, origin = ship) {
   }));
 }
 
-function nextShip() {
-  return FLEET[placements.length] || null;
+function isShipPlaced(shipId) {
+  return placements.some((placement) => placement.id === shipId);
+}
+
+function selectedShip() {
+  return FLEET.find((ship) => ship.id === selectedShipId && !isShipPlaced(ship.id)) || null;
+}
+
+function firstUnplacedShip() {
+  return FLEET.find((ship) => !isShipPlaced(ship.id)) || null;
+}
+
+function ensureSelectedShip() {
+  if (!selectedShip()) {
+    selectedShipId = firstUnplacedShip()?.id || null;
+  }
 }
 
 function placementIsValid(ship) {
-  const occupied = new Set(placements.flatMap((placement) => cellsForPlacement(placement).map(key)));
+  const occupied = new Set(
+    placements.filter((placement) => placement.id !== ship.id).flatMap((placement) => cellsForPlacement(placement).map(key))
+  );
   return cellsForPlacement(ship).every((cell) => {
     return cell.x >= 0 && cell.x < boardSize() && cell.y >= 0 && cell.y < boardSize() && !occupied.has(key(cell));
   });
@@ -79,6 +97,7 @@ function renderLog() {
 }
 
 function renderBoards() {
+  document.documentElement.style.setProperty("--board-size", boardSize());
   renderOwnBoard();
   renderAttackBoard();
 }
@@ -124,7 +143,7 @@ function renderOwnBoard() {
 }
 
 function getPreviewCells() {
-  const ship = nextShip();
+  const ship = selectedShip();
   if (!ship || !hoverCell || roomState?.you?.ready) {
     return { cells: new Set(), valid: true };
   }
@@ -173,8 +192,12 @@ function placeCurrentShip(x, y) {
     return;
   }
   if (roomState?.you?.ready) return;
-  const ship = nextShip();
-  if (!ship) return;
+  ensureSelectedShip();
+  const ship = selectedShip();
+  if (!ship) {
+    addLog("请先选择一艘未摆放的军舰。", "tone-warning");
+    return;
+  }
 
   const placement = { ...ship, x, y, orientation };
   if (!placementIsValid(placement)) {
@@ -184,6 +207,7 @@ function placeCurrentShip(x, y) {
 
   placements.push(placement);
   addLog(`已放置 ${ship.label}。`, "tone-success");
+  selectedShipId = firstUnplacedShip()?.id || null;
   updateSetup();
   renderOwnBoard();
 }
@@ -198,9 +222,29 @@ function attackCell(x, y) {
 }
 
 function updateSetup() {
-  const ship = nextShip();
+  ensureSelectedShip();
+  const ship = selectedShip();
   els.currentShipText.textContent = ship ? `${ship.label}（长度 ${ship.length}）` : "舰队已摆放完成";
   els.readyButton.disabled = placements.length !== FLEET.length || roomState?.you?.ready;
+  renderShipPicker();
+}
+
+function renderShipPicker() {
+  els.shipPicker.innerHTML = "";
+  FLEET.forEach((ship) => {
+    const placed = isShipPlaced(ship.id);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `ship-option ${selectedShipId === ship.id && !placed ? "active" : ""} ${placed ? "placed" : ""}`;
+    button.innerHTML = `<span>${ship.label}</span><strong>${ship.length}格</strong>`;
+    button.disabled = placed || roomState?.you?.ready;
+    button.addEventListener("click", () => {
+      selectedShipId = ship.id;
+      updateSetup();
+      renderOwnBoard();
+    });
+    els.shipPicker.appendChild(button);
+  });
 }
 
 function renderHeader() {
@@ -241,7 +285,12 @@ function renderInventory() {
 
 function syncRoomState(nextState) {
   const previousPhase = roomState?.phase;
+  const previousRoomId = roomState?.id;
   roomState = nextState;
+  if (previousRoomId && previousRoomId !== roomState.id) {
+    placements = [];
+    selectedShipId = FLEET[0].id;
+  }
   renderHeader();
   updateSetup();
   renderInventory();
@@ -279,6 +328,7 @@ els.verticalButton.addEventListener("click", () => {
 
 els.resetFleetButton.addEventListener("click", () => {
   placements = [];
+  selectedShipId = FLEET[0].id;
   updateSetup();
   renderOwnBoard();
 });
